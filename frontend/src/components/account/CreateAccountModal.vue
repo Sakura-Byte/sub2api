@@ -2513,7 +2513,7 @@
         :show-cookie-option="form.platform === 'anthropic'"
         :show-refresh-token-option="form.platform === 'openai' || form.platform === 'sora' || form.platform === 'antigravity'"
         :show-mobile-refresh-token-option="form.platform === 'openai'"
-        :show-session-token-option="form.platform === 'sora'"
+        :show-session-token-option="form.platform === 'openai' || form.platform === 'sora'"
         :show-access-token-option="form.platform === 'sora'"
         :platform="form.platform"
         :show-project-id="geminiOAuthType === 'code_assist'"
@@ -4127,8 +4127,8 @@ const handleValidateRefreshToken = (rt: string) => {
 }
 
 const handleValidateSessionToken = (sessionToken: string) => {
-  if (form.platform === 'sora') {
-    handleSoraValidateST(sessionToken)
+  if (form.platform === 'openai' || form.platform === 'sora') {
+    handleOpenAIBatchST(sessionToken)
   }
 }
 
@@ -4525,10 +4525,12 @@ const handleOpenAIValidateRT = (rt: string) => handleOpenAIBatchRT(rt)
 // 手动输入 Mobile RT（SoraClientID）
 const handleOpenAIValidateMobileRT = (rt: string) => handleOpenAIBatchRT(rt, OPENAI_MOBILE_RT_CLIENT_ID)
 
-// Sora 手动 ST 批量验证和创建
-const handleSoraValidateST = async (sessionTokenInput: string) => {
+// OpenAI/Sora 手动 ST 批量验证和创建
+const handleOpenAIBatchST = async (sessionTokenInput: string) => {
   const oauthClient = activeOpenAIOAuth.value
   if (!sessionTokenInput.trim()) return
+
+  const targetPlatform = form.platform === 'sora' ? 'sora' : 'openai'
 
   const sessionTokens = sessionTokenInput
     .split('\n')
@@ -4561,16 +4563,20 @@ const handleSoraValidateST = async (sessionTokenInput: string) => {
         const credentials = oauthClient.buildCredentials(tokenInfo)
         credentials.session_token = sessionTokens[i]
         const oauthExtra = oauthClient.buildExtraInfo(tokenInfo) as Record<string, unknown> | undefined
-        const soraExtra = buildSoraExtra(oauthExtra)
+        const extra = targetPlatform === 'sora'
+          ? buildSoraExtra(oauthExtra)
+          : buildOpenAIExtra(oauthExtra)
 
-        const accountName = sessionTokens.length > 1 ? `${form.name} #${i + 1}` : form.name
+        const defaultName = targetPlatform === 'sora' ? 'Sora OAuth Account' : 'OpenAI OAuth Account'
+        const baseName = form.name || tokenInfo.email || defaultName
+        const accountName = sessionTokens.length > 1 ? `${baseName} #${i + 1}` : baseName
         await adminAPI.accounts.create({
           name: accountName,
           notes: form.notes,
-          platform: 'sora',
+          platform: targetPlatform,
           type: 'oauth',
           credentials,
-          extra: soraExtra,
+          extra,
           proxy_id: form.proxy_id,
           concurrency: form.concurrency,
           load_factor: form.load_factor ?? undefined,

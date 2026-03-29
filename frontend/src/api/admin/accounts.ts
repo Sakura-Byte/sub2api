@@ -569,16 +569,16 @@ export async function refreshOpenAIToken(
 }
 
 /**
- * Validate Sora session token and exchange to access token
- * @param sessionToken - Sora session token
+ * Validate OpenAI/Sora session token and exchange to access token
+ * @param sessionToken - ChatGPT or Sora session token
  * @param proxyId - Optional proxy ID
  * @param endpoint - API endpoint path
  * @returns Token information including access_token
  */
-export async function validateSoraSessionToken(
+export async function validateOpenAISessionToken(
   sessionToken: string,
   proxyId?: number | null,
-  endpoint: string = '/admin/sora/st2at'
+  endpoint: string = '/admin/openai/st2at'
 ): Promise<Record<string, unknown>> {
   const payload: { session_token: string; proxy_id?: number } = {
     session_token: sessionToken
@@ -588,6 +588,14 @@ export async function validateSoraSessionToken(
   }
   const { data } = await apiClient.post<Record<string, unknown>>(endpoint, payload)
   return data
+}
+
+export async function validateSoraSessionToken(
+  sessionToken: string,
+  proxyId?: number | null,
+  endpoint: string = '/admin/sora/st2at'
+): Promise<Record<string, unknown>> {
+  return validateOpenAISessionToken(sessionToken, proxyId, endpoint)
 }
 
 /**
@@ -663,6 +671,7 @@ export const accountsAPI = {
   generateAuthUrl,
   exchangeCode,
   refreshOpenAIToken,
+  validateOpenAISessionToken,
   validateSoraSessionToken,
   batchCreate,
   batchUpdateCredentials,

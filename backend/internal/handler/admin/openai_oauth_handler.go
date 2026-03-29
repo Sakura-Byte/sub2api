@@ -145,6 +145,37 @@ func (h *OpenAIOAuthHandler) RefreshToken(c *gin.Context) {
 	response.Success(c, tokenInfo)
 }
 
+// ExchangeOpenAISessionToken exchanges ChatGPT session token to access token
+// POST /api/v1/admin/openai/st2at
+func (h *OpenAIOAuthHandler) ExchangeOpenAISessionToken(c *gin.Context) {
+	var req struct {
+		SessionToken string `json:"session_token"`
+		ST           string `json:"st"`
+		ProxyID      *int64 `json:"proxy_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	sessionToken := strings.TrimSpace(req.SessionToken)
+	if sessionToken == "" {
+		sessionToken = strings.TrimSpace(req.ST)
+	}
+	if sessionToken == "" {
+		response.BadRequest(c, "session_token is required")
+		return
+	}
+
+	tokenInfo, err := h.openaiOAuthService.ExchangeOpenAISessionToken(c.Request.Context(), sessionToken, req.ProxyID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, tokenInfo)
+}
+
 // ExchangeSoraSessionToken exchanges Sora session token to access token
 // POST /api/v1/admin/sora/st2at
 func (h *OpenAIOAuthHandler) ExchangeSoraSessionToken(c *gin.Context) {

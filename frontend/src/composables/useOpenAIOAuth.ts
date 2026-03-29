@@ -5,6 +5,7 @@ import { adminAPI } from '@/api/admin'
 export interface OpenAITokenInfo {
   access_token?: string
   refresh_token?: string
+  session_token?: string
   client_id?: string
   id_token?: string
   token_type?: string
@@ -172,7 +173,7 @@ export function useOpenAIOAuth(options?: UseOpenAIOAuthOptions) {
     loading.value = true
     error.value = ''
     try {
-      const tokenInfo = await adminAPI.accounts.validateSoraSessionToken(
+      const tokenInfo = await adminAPI.accounts.validateOpenAISessionToken(
         sessionToken.trim(),
         proxyId,
         `${endpointPrefix}/st2at`
@@ -197,6 +198,9 @@ export function useOpenAIOAuth(options?: UseOpenAIOAuthOptions) {
     // 仅在返回了新的 refresh_token 时才写入，防止用空值覆盖已有令牌
     if (tokenInfo.refresh_token) {
       creds.refresh_token = tokenInfo.refresh_token
+    }
+    if (tokenInfo.session_token) {
+      creds.session_token = tokenInfo.session_token
     }
     if (tokenInfo.id_token) {
       creds.id_token = tokenInfo.id_token

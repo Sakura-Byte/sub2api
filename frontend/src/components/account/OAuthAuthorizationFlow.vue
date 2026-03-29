@@ -168,13 +168,13 @@
           </div>
         </div>
 
-        <!-- Session Token Input (Sora) -->
+        <!-- Session Token Input (OpenAI / Sora) -->
         <div v-if="inputMethod === 'session_token'" class="space-y-4">
           <div
             class="rounded-lg border border-blue-300 bg-white/80 p-4 dark:border-blue-600 dark:bg-gray-800/80"
           >
             <p class="mb-3 text-sm text-blue-700 dark:text-blue-300">
-              {{ t(getOAuthKey('sessionTokenDesc')) }}
+              {{ sessionTokenDescription }}
             </p>
 
             <div class="mb-4">
@@ -203,20 +203,20 @@
                 <button
                   type="button"
                   class="btn btn-secondary px-2 py-1 text-xs"
-                  @click="handleOpenSoraSessionUrl"
+                  @click="handleOpenSessionUrl"
                 >
                   {{ t(getOAuthKey('openSessionUrl')) }}
                 </button>
                 <button
                   type="button"
                   class="btn btn-secondary px-2 py-1 text-xs"
-                  @click="handleCopySoraSessionUrl"
+                  @click="handleCopySessionUrl"
                 >
                   {{ t(getOAuthKey('copySessionUrl')) }}
                 </button>
               </div>
               <p class="mt-1 break-all text-xs text-blue-600 dark:text-blue-400">
-                {{ soraSessionUrl }}
+                {{ sessionTokenFetchUrl }}
               </p>
               <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">
                 {{ t(getOAuthKey('sessionUrlHint')) }}
@@ -771,7 +771,7 @@ interface Props {
   showCookieOption?: boolean // Whether to show cookie auto-auth option
   showRefreshTokenOption?: boolean // Whether to show refresh token input option (OpenAI only)
   showMobileRefreshTokenOption?: boolean // Whether to show mobile refresh token option (OpenAI only)
-  showSessionTokenOption?: boolean // Whether to show session token input option (Sora only)
+  showSessionTokenOption?: boolean // Whether to show session token input option (OpenAI/Sora)
   showAccessTokenOption?: boolean // Whether to show access token input option (Sora only)
   platform?: AccountPlatform // Platform type for different UI/text
   showProjectId?: boolean // New prop to control project ID visibility
@@ -887,7 +887,11 @@ const parsedAccessTokensText = computed(() => {
   return parsedSoraRawTokens.value.accessTokens.join('\n')
 })
 
-const soraSessionUrl = 'https://sora.chatgpt.com/api/auth/session'
+const sessionTokenFetchUrl = computed(() => {
+  return props.platform === 'openai'
+    ? 'https://chatgpt.com/api/auth/session'
+    : 'https://sora.chatgpt.com/api/auth/session'
+})
 
 const parsedAccessTokenCount = computed(() => {
   return accessTokenInput.value
@@ -895,6 +899,8 @@ const parsedAccessTokenCount = computed(() => {
     .map((at) => at.trim())
     .filter((at) => at).length
 })
+
+const sessionTokenDescription = computed(() => t(getOAuthKey('sessionTokenDesc')))
 
 // Watchers
 watch(inputMethod, (newVal) => {
@@ -973,12 +979,12 @@ const handleValidateSessionToken = () => {
   }
 }
 
-const handleOpenSoraSessionUrl = () => {
-  window.open(soraSessionUrl, '_blank', 'noopener,noreferrer')
+const handleOpenSessionUrl = () => {
+  window.open(sessionTokenFetchUrl.value, '_blank', 'noopener,noreferrer')
 }
 
-const handleCopySoraSessionUrl = () => {
-  copyToClipboard(soraSessionUrl, 'URL copied to clipboard')
+const handleCopySessionUrl = () => {
+  copyToClipboard(sessionTokenFetchUrl.value, 'URL copied to clipboard')
 }
 
 const handleImportAccessToken = () => {
