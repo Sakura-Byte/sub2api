@@ -5,6 +5,8 @@ package service
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -923,4 +925,46 @@ func TestOpenAITokenProvider_RuntimeMetrics_LockAcquireFailure(t *testing.T) {
 	metrics := provider.SnapshotRuntimeMetrics()
 	require.GreaterOrEqual(t, metrics.LockAcquireFailure, int64(1))
 	require.GreaterOrEqual(t, metrics.RefreshRequests, int64(1))
+}
+
+func TestOpenAITokenProvider_SessionTokenRecovery(t *testing.T) {
+	oldURL := openAIChatGPTSessionAuthURL
+	t.Cleanup(func() {
+		openAIChatGPTSessionAuthURL = oldURL
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/auth/session", r.URL.Path)
+		require.Contains(t, r.Header.Get("Cookie"), "__Secure-next-auth.session-token=st-123")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"accessToken":"session-access-token",
+			"sessionToken":"st-123",
+			"expires":"2030-01-01T00:00:00Z",
+			"user":{"email":"session@example.com"},
+			"account":{"id":"acc-session","planType":"free"}
+		}`))
+	}))
+	defer server.Close()
+	openAIChatGPTSessionAuthURL = server.URL + "/api/auth/session"
+
+	cache := newOpenAITokenCacheStub()
+	account := &Account{
+		ID:       211,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"session_token": "st-123",
+		},
+	}
+
+	oauthService := NewOpenAIOAuthService(nil, nil)
+	provider := NewOpenAITokenProvider(nil, cache, oauthService)
+
+	token, err := provider.GetAccessToken(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, "session-access-token", token)
+	require.Equal(t, "session-access-token", account.GetCredential("access_token"))
+	require.Equal(t, "st-123", account.GetCredential("session_token"))
+	require.Equal(t, "acc-session", account.GetCredential("chatgpt_account_id"))
 }

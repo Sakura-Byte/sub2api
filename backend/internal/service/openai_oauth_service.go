@@ -19,6 +19,7 @@ import (
 )
 
 var openAISoraSessionAuthURL = "https://sora.chatgpt.com/api/auth/session"
+var openAIChatGPTSessionAuthURL = "https://chatgpt.com/api/auth/session"
 
 var soraSessionCookiePattern = regexp.MustCompile(`(?i)(?:^|[\n\r;])\s*(?:(?:set-cookie|cookie)\s*:\s*)?__Secure-(?:next-auth|authjs)\.session-token(?:\.(\d+))?=([^;\r\n]+)`)
 
@@ -129,6 +130,7 @@ type OpenAIExchangeCodeInput struct {
 type OpenAITokenInfo struct {
 	AccessToken      string `json:"access_token"`
 	RefreshToken     string `json:"refresh_token"`
+	SessionToken     string `json:"session_token,omitempty"`
 	IDToken          string `json:"id_token,omitempty"`
 	ExpiresIn        int64  `json:"expires_in"`
 	ExpiresAt        int64  `json:"expires_at"`
@@ -281,6 +283,112 @@ func (s *OpenAIOAuthService) RefreshTokenWithClientID(ctx context.Context, refre
 	// 尝试设置隐私（关闭训练数据共享），best-effort
 	if tokenInfo.AccessToken != "" && s.privacyClientFactory != nil {
 		tokenInfo.PrivacyMode = disableOpenAITraining(ctx, s.privacyClientFactory, tokenInfo.AccessToken, proxyURL)
+	}
+
+	return tokenInfo, nil
+}
+
+// ExchangeOpenAISessionToken exchanges ChatGPT Web session_token to access_token.
+func (s *OpenAIOAuthService) ExchangeOpenAISessionToken(ctx context.Context, sessionToken string, proxyID *int64) (*OpenAITokenInfo, error) {
+	sessionToken = normalizeSoraSessionTokenInput(sessionToken)
+	if strings.TrimSpace(sessionToken) == "" {
+		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_SESSION_TOKEN_REQUIRED", "session_token is required")
+	}
+
+	proxyURL, err := s.resolveProxyURL(ctx, proxyID)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, openAIChatGPTSessionAuthURL, nil)
+	if err != nil {
+		return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_SESSION_REQUEST_BUILD_FAILED", "failed to build request: %v", err)
+	}
+	req.Header.Set("Cookie", "__Secure-next-auth.session-token="+strings.TrimSpace(sessionToken))
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Origin", "https://chatgpt.com")
+	req.Header.Set("Referer", "https://chatgpt.com/")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36")
+
+	client, err := httpclient.GetClient(httpclient.Options{
+		ProxyURL: proxyURL,
+		Timeout:  120 * time.Second,
+	})
+	if err != nil {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_SESSION_CLIENT_FAILED", "create http client failed: %v", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_SESSION_REQUEST_FAILED", "request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if resp.StatusCode != http.StatusOK {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_SESSION_EXCHANGE_FAILED", "status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var sessionResp struct {
+		AccessToken  string `json:"accessToken"`
+		SessionToken string `json:"sessionToken"`
+		Expires      string `json:"expires"`
+		User         struct {
+			Email string `json:"email"`
+		} `json:"user"`
+		Account struct {
+			ID       string `json:"id"`
+			PlanType string `json:"planType"`
+		} `json:"account"`
+	}
+	if err := json.Unmarshal(body, &sessionResp); err != nil {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_SESSION_PARSE_FAILED", "failed to parse response: %v", err)
+	}
+	if strings.TrimSpace(sessionResp.AccessToken) == "" {
+		return nil, infraerrors.New(http.StatusBadGateway, "OPENAI_SESSION_ACCESS_TOKEN_MISSING", "session exchange response missing access token")
+	}
+
+	expiresAt := time.Now().Add(time.Hour).Unix()
+	if strings.TrimSpace(sessionResp.Expires) != "" {
+		if parsed, parseErr := time.Parse(time.RFC3339, sessionResp.Expires); parseErr == nil {
+			expiresAt = parsed.Unix()
+		}
+	}
+	expiresIn := expiresAt - time.Now().Unix()
+	if expiresIn < 0 {
+		expiresIn = 0
+	}
+
+	tokenInfo := &OpenAITokenInfo{
+		AccessToken:      strings.TrimSpace(sessionResp.AccessToken),
+		SessionToken:     strings.TrimSpace(sessionResp.SessionToken),
+		ExpiresIn:        expiresIn,
+		ExpiresAt:        expiresAt,
+		Email:            strings.TrimSpace(sessionResp.User.Email),
+		ChatGPTAccountID: strings.TrimSpace(sessionResp.Account.ID),
+		PlanType:         strings.TrimSpace(sessionResp.Account.PlanType),
+	}
+	if tokenInfo.SessionToken == "" {
+		tokenInfo.SessionToken = strings.TrimSpace(sessionToken)
+	}
+
+	if claims, parseErr := openai.DecodeIDToken(tokenInfo.AccessToken); parseErr == nil {
+		if userInfo := claims.GetUserInfo(); userInfo != nil {
+			if tokenInfo.Email == "" && userInfo.Email != "" {
+				tokenInfo.Email = userInfo.Email
+			}
+			if tokenInfo.ChatGPTAccountID == "" && userInfo.ChatGPTAccountID != "" {
+				tokenInfo.ChatGPTAccountID = userInfo.ChatGPTAccountID
+			}
+			if tokenInfo.ChatGPTUserID == "" && userInfo.ChatGPTUserID != "" {
+				tokenInfo.ChatGPTUserID = userInfo.ChatGPTUserID
+			}
+			if tokenInfo.OrganizationID == "" && userInfo.OrganizationID != "" {
+				tokenInfo.OrganizationID = userInfo.OrganizationID
+			}
+			if tokenInfo.PlanType == "" && userInfo.PlanType != "" {
+				tokenInfo.PlanType = userInfo.PlanType
+			}
+		}
 	}
 
 	return tokenInfo, nil
@@ -528,6 +636,9 @@ func (s *OpenAIOAuthService) BuildAccountCredentials(tokenInfo *OpenAITokenInfo)
 	// 仅在刷新响应返回了新的 refresh_token 时才更新，防止用空值覆盖已有令牌
 	if strings.TrimSpace(tokenInfo.RefreshToken) != "" {
 		creds["refresh_token"] = tokenInfo.RefreshToken
+	}
+	if strings.TrimSpace(tokenInfo.SessionToken) != "" {
+		creds["session_token"] = tokenInfo.SessionToken
 	}
 
 	if tokenInfo.IDToken != "" {

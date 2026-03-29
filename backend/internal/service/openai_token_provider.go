@@ -154,6 +154,14 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 	needsRefresh := expiresAt == nil || time.Until(*expiresAt) <= openAITokenRefreshSkew
 	refreshFailed := false
 
+	if needsRefresh && account.Platform == PlatformOpenAI {
+		if recovered, ok := p.tryRecoverFromSessionToken(ctx, account); ok {
+			account = recovered
+			expiresAt = account.GetCredentialAsTime("expires_at")
+			needsRefresh = expiresAt == nil || time.Until(*expiresAt) <= openAITokenRefreshSkew
+		}
+	}
+
 	if needsRefresh && p.refreshAPI != nil && p.executor != nil {
 		p.metrics.refreshRequests.Add(1)
 		p.metrics.touchNow()
@@ -259,6 +267,38 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 	}
 
 	return accessToken, nil
+}
+
+func (p *OpenAITokenProvider) tryRecoverFromSessionToken(ctx context.Context, account *Account) (*Account, bool) {
+	if p == nil || account == nil || account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth {
+		return account, false
+	}
+	if p.openAIOAuthService == nil {
+		return account, false
+	}
+
+	sessionToken := strings.TrimSpace(account.GetOpenAISessionToken())
+	if sessionToken == "" {
+		return account, false
+	}
+
+	tokenInfo, err := p.openAIOAuthService.ExchangeOpenAISessionToken(ctx, sessionToken, account.ProxyID)
+	if err != nil {
+		slog.Warn("openai_session_token_exchange_failed", "account_id", account.ID, "error", err)
+		return account, false
+	}
+
+	newCredentials := cloneCredentials(account.Credentials)
+	for k, v := range p.openAIOAuthService.BuildAccountCredentials(tokenInfo) {
+		newCredentials[k] = v
+	}
+	newCredentials["session_token"] = sessionToken
+	account.Credentials = cloneCredentials(newCredentials)
+
+	if err := persistAccountCredentials(ctx, p.accountRepo, account, newCredentials); err != nil {
+		slog.Warn("openai_session_token_persist_failed", "account_id", account.ID, "error", err)
+	}
+	return account, true
 }
 
 func (p *OpenAITokenProvider) waitForTokenAfterLockRace(ctx context.Context, cacheKey string) (string, error) {

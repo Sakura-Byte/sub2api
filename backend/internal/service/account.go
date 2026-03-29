@@ -827,6 +827,13 @@ func (a *Account) GetOpenAIRefreshToken() string {
 	return a.GetCredential("refresh_token")
 }
 
+func (a *Account) GetOpenAISessionToken() string {
+	if !a.IsOpenAIOAuth() {
+		return ""
+	}
+	return a.GetCredential("session_token")
+}
+
 func (a *Account) GetOpenAIIDToken() string {
 	if !a.IsOpenAIOAuth() {
 		return ""
