@@ -881,6 +881,7 @@ func (c *SoraSDKClient) recoverAccessToken(ctx context.Context, account *Account
 
 // exchangeSessionToken 通过 session_token 换取 access_token
 func (c *SoraSDKClient) exchangeSessionToken(ctx context.Context, account *Account, sessionToken string) (string, string, error) {
+	sessionToken = normalizeSoraSessionTokenInput(sessionToken)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://sora.chatgpt.com/api/auth/session", nil)
 	if err != nil {
 		return "", "", err
@@ -921,7 +922,7 @@ func (c *SoraSDKClient) exchangeSessionToken(ctx context.Context, account *Accou
 	if accessToken == "" {
 		return "", "", errors.New("session exchange missing accessToken")
 	}
-	expiresAt := strings.TrimSpace(gjson.GetBytes(body, "expires").String())
+	expiresAt := resolveOpenAISessionAccessTokenExpiryRFC3339(accessToken, gjson.GetBytes(body, "expires").String())
 	return accessToken, expiresAt, nil
 }
 

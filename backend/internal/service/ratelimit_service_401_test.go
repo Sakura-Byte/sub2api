@@ -158,3 +158,61 @@ func TestRateLimitService_HandleUpstreamError_OAuth401UsesCredentialsUpdater(t *
 	require.Equal(t, 1, repo.updateCredentialsCalls)
 	require.NotEmpty(t, repo.lastCredentials["expires_at"])
 }
+
+func TestRateLimitService_HandleUpstreamError_OpenAISessionTokenRevokedUsesRefreshPath(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	invalidator := &tokenCacheInvalidatorRecorder{}
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service.SetTokenCacheInvalidator(invalidator)
+	account := &Account{
+		ID:       104,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":  "token",
+			"session_token": "st-token",
+		},
+	}
+
+	shouldDisable := service.HandleUpstreamError(
+		context.Background(),
+		account,
+		401,
+		http.Header{},
+		[]byte(`{"error":{"message":"Encountered invalidated oauth token for user, failing request","code":"token_revoked"}}`),
+	)
+
+	require.True(t, shouldDisable)
+	require.Equal(t, 0, repo.setErrorCalls)
+	require.Equal(t, 1, repo.tempCalls)
+	require.Equal(t, 1, repo.updateCredentialsCalls)
+	require.Len(t, invalidator.accounts, 1)
+	require.NotEmpty(t, repo.lastCredentials["expires_at"])
+}
+
+func TestRateLimitService_HandleUpstreamError_OpenAITokenRevokedWithoutSessionTokenSetsError(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	account := &Account{
+		ID:       105,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "token",
+		},
+	}
+
+	shouldDisable := service.HandleUpstreamError(
+		context.Background(),
+		account,
+		401,
+		http.Header{},
+		[]byte(`{"error":{"message":"Encountered invalidated oauth token for user, failing request","code":"token_revoked"}}`),
+	)
+
+	require.True(t, shouldDisable)
+	require.Equal(t, 1, repo.setErrorCalls)
+	require.Equal(t, 0, repo.tempCalls)
+	require.Equal(t, 0, repo.updateCredentialsCalls)
+	require.Contains(t, repo.lastErrorMsg, "Token revoked")
+}

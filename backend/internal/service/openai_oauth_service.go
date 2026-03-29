@@ -347,12 +347,7 @@ func (s *OpenAIOAuthService) ExchangeOpenAISessionToken(ctx context.Context, ses
 		return nil, infraerrors.New(http.StatusBadGateway, "OPENAI_SESSION_ACCESS_TOKEN_MISSING", "session exchange response missing access token")
 	}
 
-	expiresAt := time.Now().Add(time.Hour).Unix()
-	if strings.TrimSpace(sessionResp.Expires) != "" {
-		if parsed, parseErr := time.Parse(time.RFC3339, sessionResp.Expires); parseErr == nil {
-			expiresAt = parsed.Unix()
-		}
-	}
+	expiresAt := resolveOpenAISessionAccessTokenExpiryUnix(sessionResp.AccessToken, sessionResp.Expires)
 	expiresIn := expiresAt - time.Now().Unix()
 	if expiresIn < 0 {
 		expiresIn = 0
@@ -449,23 +444,19 @@ func (s *OpenAIOAuthService) ExchangeSoraSessionToken(ctx context.Context, sessi
 		return nil, infraerrors.New(http.StatusBadGateway, "SORA_SESSION_ACCESS_TOKEN_MISSING", "session exchange response missing access token")
 	}
 
-	expiresAt := time.Now().Add(time.Hour).Unix()
-	if strings.TrimSpace(sessionResp.Expires) != "" {
-		if parsed, parseErr := time.Parse(time.RFC3339, sessionResp.Expires); parseErr == nil {
-			expiresAt = parsed.Unix()
-		}
-	}
+	expiresAt := resolveOpenAISessionAccessTokenExpiryUnix(sessionResp.AccessToken, sessionResp.Expires)
 	expiresIn := expiresAt - time.Now().Unix()
 	if expiresIn < 0 {
 		expiresIn = 0
 	}
 
 	return &OpenAITokenInfo{
-		AccessToken: strings.TrimSpace(sessionResp.AccessToken),
-		ExpiresIn:   expiresIn,
-		ExpiresAt:   expiresAt,
-		ClientID:    openai.SoraClientID,
-		Email:       strings.TrimSpace(sessionResp.User.Email),
+		AccessToken:  strings.TrimSpace(sessionResp.AccessToken),
+		SessionToken: strings.TrimSpace(sessionToken),
+		ExpiresIn:    expiresIn,
+		ExpiresAt:    expiresAt,
+		ClientID:     openai.SoraClientID,
+		Email:        strings.TrimSpace(sessionResp.User.Email),
 	}, nil
 }
 
