@@ -150,8 +150,27 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		}
 		// 其他 400 错误（如参数问题）不处理，不禁用账号
 	case 401:
-		// OpenAI: token_invalidated / token_revoked 表示 token 被永久作废（非过期），直接标记 error
+		// OpenAI: token_revoked 直接删除本地账号；token_invalidated 保持现有失效/刷新逻辑。
 		openai401Code := extractUpstreamErrorCode(responseBody)
+		if account.Platform == PlatformOpenAI && openai401Code == "token_revoked" {
+			if s.tokenCacheInvalidator != nil {
+				if err := s.tokenCacheInvalidator.InvalidateToken(ctx, account); err != nil {
+					slog.Warn("openai_token_revoked_invalidate_cache_failed", "account_id", account.ID, "error", err)
+				}
+			}
+			if err := s.accountRepo.Delete(ctx, account.ID); err != nil {
+				slog.Warn("openai_token_revoked_delete_failed", "account_id", account.ID, "error", err)
+				msg := "Token revoked (401): account authentication permanently revoked"
+				if upstreamMsg != "" {
+					msg = "Token revoked (401): " + upstreamMsg
+				}
+				s.handleAuthError(ctx, account, msg)
+			} else {
+				slog.Info("openai_token_revoked_account_deleted", "account_id", account.ID)
+			}
+			shouldDisable = true
+			break
+		}
 		hasRecoverableOpenAISessionToken := account.Platform == PlatformOpenAI &&
 			account.Type == AccountTypeOAuth &&
 			strings.TrimSpace(account.GetOpenAISessionToken()) != ""

@@ -18,6 +18,9 @@ type rateLimitAccountRepoStub struct {
 	setErrorCalls          int
 	tempCalls              int
 	updateCredentialsCalls int
+	deleteCalls            int
+	deletedIDs             []int64
+	deleteErr              error
 	lastCredentials        map[string]any
 	lastErrorMsg           string
 }
@@ -37,6 +40,12 @@ func (r *rateLimitAccountRepoStub) UpdateCredentials(ctx context.Context, id int
 	r.updateCredentialsCalls++
 	r.lastCredentials = cloneCredentials(credentials)
 	return nil
+}
+
+func (r *rateLimitAccountRepoStub) Delete(ctx context.Context, id int64) error {
+	r.deleteCalls++
+	r.deletedIDs = append(r.deletedIDs, id)
+	return r.deleteErr
 }
 
 type tokenCacheInvalidatorRecorder struct {
@@ -159,7 +168,7 @@ func TestRateLimitService_HandleUpstreamError_OAuth401UsesCredentialsUpdater(t *
 	require.NotEmpty(t, repo.lastCredentials["expires_at"])
 }
 
-func TestRateLimitService_HandleUpstreamError_OpenAISessionTokenRevokedUsesRefreshPath(t *testing.T) {
+func TestRateLimitService_HandleUpstreamError_OpenAITokenRevokedDeletesAccount(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
 	invalidator := &tokenCacheInvalidatorRecorder{}
 	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
@@ -184,15 +193,18 @@ func TestRateLimitService_HandleUpstreamError_OpenAISessionTokenRevokedUsesRefre
 
 	require.True(t, shouldDisable)
 	require.Equal(t, 0, repo.setErrorCalls)
-	require.Equal(t, 1, repo.tempCalls)
-	require.Equal(t, 1, repo.updateCredentialsCalls)
+	require.Equal(t, 0, repo.tempCalls)
+	require.Equal(t, 0, repo.updateCredentialsCalls)
+	require.Equal(t, 1, repo.deleteCalls)
+	require.Equal(t, []int64{104}, repo.deletedIDs)
 	require.Len(t, invalidator.accounts, 1)
-	require.NotEmpty(t, repo.lastCredentials["expires_at"])
 }
 
-func TestRateLimitService_HandleUpstreamError_OpenAITokenRevokedWithoutSessionTokenSetsError(t *testing.T) {
-	repo := &rateLimitAccountRepoStub{}
+func TestRateLimitService_HandleUpstreamError_OpenAITokenRevokedDeleteFallbackSetsError(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{deleteErr: errors.New("delete failed")}
+	invalidator := &tokenCacheInvalidatorRecorder{}
 	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service.SetTokenCacheInvalidator(invalidator)
 	account := &Account{
 		ID:       105,
 		Platform: PlatformOpenAI,
@@ -211,8 +223,10 @@ func TestRateLimitService_HandleUpstreamError_OpenAITokenRevokedWithoutSessionTo
 	)
 
 	require.True(t, shouldDisable)
+	require.Equal(t, 1, repo.deleteCalls)
 	require.Equal(t, 1, repo.setErrorCalls)
 	require.Equal(t, 0, repo.tempCalls)
 	require.Equal(t, 0, repo.updateCredentialsCalls)
 	require.Contains(t, repo.lastErrorMsg, "Token revoked")
+	require.Len(t, invalidator.accounts, 1)
 }
