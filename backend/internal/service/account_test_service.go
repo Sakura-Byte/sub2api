@@ -68,6 +68,7 @@ type AccountTestService struct {
 	accountRepo               AccountRepository
 	geminiTokenProvider       *GeminiTokenProvider
 	antigravityGatewayService *AntigravityGatewayService
+	rateLimitService          *RateLimitService
 	httpUpstream              HTTPUpstream
 	cfg                       *config.Config
 	tlsFPProfileService       *TLSFingerprintProfileService
@@ -97,6 +98,14 @@ func NewAccountTestService(
 		soraTestLastRun:           make(map[int64]time.Time),
 		soraTestCooldown:          defaultSoraTestCooldown,
 	}
+}
+
+// SetRateLimitService wires the shared upstream error policy into manual account tests.
+func (s *AccountTestService) SetRateLimitService(rateLimitService *RateLimitService) {
+	if s == nil {
+		return
+	}
+	s.rateLimitService = rateLimitService
 }
 
 func (s *AccountTestService) validateUpstreamBaseURL(raw string) (string, error) {
@@ -550,7 +559,9 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 				_ = s.accountRepo.SetRateLimited(ctx, account.ID, *resetAt)
 				account.RateLimitResetAt = resetAt
 			}
-			if resp.StatusCode == http.StatusUnauthorized && isOpenAINoOrganizationError(resp.StatusCode, body) {
+			if resp.StatusCode == http.StatusUnauthorized && s.rateLimitService != nil {
+				s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, body)
+			} else if resp.StatusCode == http.StatusUnauthorized && isOpenAINoOrganizationError(resp.StatusCode, body) {
 				s.tempUnschedOpenAINoOrganization(ctx, account, body)
 			}
 		}

@@ -867,7 +867,27 @@ export interface CreateAccountRequest {
   group_ids?: number[]
   expires_at?: number | null
   auto_pause_on_expired?: boolean
+  initial_test?: InitialAccountTestRequest
   confirm_mixed_channel_risk?: boolean
+}
+
+export interface InitialAccountTestRequest {
+  enabled?: boolean
+  model_id?: string
+}
+
+export interface InitialAccountTestResult {
+  success: boolean
+  status: string
+  model_id?: string
+  message?: string
+  response_text?: string
+  error_message?: string
+  latency_ms?: number
+}
+
+export interface CreatedAccountResponse extends Account {
+  initial_test?: InitialAccountTestResult
 }
 
 export interface UpdateAccountRequest {

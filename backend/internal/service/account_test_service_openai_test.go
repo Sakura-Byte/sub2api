@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -22,6 +23,10 @@ type openAIAccountTestRepo struct {
 	tempCalls     int
 	tempUntil     *time.Time
 	tempReason    string
+	deleteCalls   int
+	deletedIDs    []int64
+	setErrorCalls int
+	lastErrorMsg  string
 }
 
 func (r *openAIAccountTestRepo) UpdateExtra(_ context.Context, _ int64, updates map[string]any) error {
@@ -39,6 +44,18 @@ func (r *openAIAccountTestRepo) SetTempUnschedulable(_ context.Context, _ int64,
 	r.tempCalls++
 	r.tempUntil = &until
 	r.tempReason = reason
+	return nil
+}
+
+func (r *openAIAccountTestRepo) Delete(_ context.Context, id int64) error {
+	r.deleteCalls++
+	r.deletedIDs = append(r.deletedIDs, id)
+	return nil
+}
+
+func (r *openAIAccountTestRepo) SetError(_ context.Context, _ int64, errorMsg string) error {
+	r.setErrorCalls++
+	r.lastErrorMsg = errorMsg
 	return nil
 }
 
@@ -140,4 +157,35 @@ func TestAccountTestService_OpenAI401NoOrganizationSetsTempUnschedulable(t *test
 	if repo.tempUntil != nil {
 		require.WithinDuration(t, time.Now().Add(10*time.Minute), *repo.tempUntil, 3*time.Second)
 	}
+}
+
+func TestAccountTestService_OpenAI401TokenRevokedDeletesAccount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := newSoraTestContext()
+
+	resp := newJSONResponse(http.StatusUnauthorized, `{"error":{"message":"Encountered invalidated oauth token for user, failing request","code":"token_revoked"},"status":401}`)
+
+	repo := &openAIAccountTestRepo{}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{resp}}
+	rateLimitSvc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := &AccountTestService{
+		accountRepo:      repo,
+		httpUpstream:     upstream,
+		cfg:              &config.Config{},
+		rateLimitService: rateLimitSvc,
+	}
+	account := &Account{
+		ID:          91,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "test-token"},
+	}
+
+	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4")
+	require.Error(t, err)
+	require.Equal(t, 1, repo.deleteCalls)
+	require.Equal(t, []int64{91}, repo.deletedIDs)
+	require.Equal(t, 0, repo.tempCalls)
+	require.Equal(t, 0, repo.setErrorCalls)
 }

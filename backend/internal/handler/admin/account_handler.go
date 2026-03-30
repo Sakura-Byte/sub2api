@@ -76,6 +76,9 @@ func NewAccountHandler(
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
 ) *AccountHandler {
+	if accountTestService != nil {
+		accountTestService.SetRateLimitService(rateLimitService)
+	}
 	return &AccountHandler{
 		adminService:            adminService,
 		oauthService:            oauthService,
@@ -95,21 +98,42 @@ func NewAccountHandler(
 
 // CreateAccountRequest represents create account request
 type CreateAccountRequest struct {
-	Name                    string         `json:"name" binding:"required"`
-	Notes                   *string        `json:"notes"`
-	Platform                string         `json:"platform" binding:"required"`
-	Type                    string         `json:"type" binding:"required,oneof=oauth setup-token apikey upstream bedrock"`
-	Credentials             map[string]any `json:"credentials" binding:"required"`
-	Extra                   map[string]any `json:"extra"`
-	ProxyID                 *int64         `json:"proxy_id"`
-	Concurrency             int            `json:"concurrency"`
-	Priority                int            `json:"priority"`
-	RateMultiplier          *float64       `json:"rate_multiplier"`
-	LoadFactor              *int           `json:"load_factor"`
-	GroupIDs                []int64        `json:"group_ids"`
-	ExpiresAt               *int64         `json:"expires_at"`
-	AutoPauseOnExpired      *bool          `json:"auto_pause_on_expired"`
-	ConfirmMixedChannelRisk *bool          `json:"confirm_mixed_channel_risk"` // 用户确认混合渠道风险
+	Name                    string                     `json:"name" binding:"required"`
+	Notes                   *string                    `json:"notes"`
+	Platform                string                     `json:"platform" binding:"required"`
+	Type                    string                     `json:"type" binding:"required,oneof=oauth setup-token apikey upstream bedrock"`
+	Credentials             map[string]any             `json:"credentials" binding:"required"`
+	Extra                   map[string]any             `json:"extra"`
+	ProxyID                 *int64                     `json:"proxy_id"`
+	Concurrency             int                        `json:"concurrency"`
+	Priority                int                        `json:"priority"`
+	RateMultiplier          *float64                   `json:"rate_multiplier"`
+	LoadFactor              *int                       `json:"load_factor"`
+	GroupIDs                []int64                    `json:"group_ids"`
+	ExpiresAt               *int64                     `json:"expires_at"`
+	AutoPauseOnExpired      *bool                      `json:"auto_pause_on_expired"`
+	InitialTest             *InitialAccountTestRequest `json:"initial_test"`
+	ConfirmMixedChannelRisk *bool                      `json:"confirm_mixed_channel_risk"` // 用户确认混合渠道风险
+}
+
+type InitialAccountTestRequest struct {
+	Enabled bool   `json:"enabled"`
+	ModelID string `json:"model_id"`
+}
+
+type InitialAccountTestResult struct {
+	Success      bool   `json:"success"`
+	Status       string `json:"status"`
+	ModelID      string `json:"model_id,omitempty"`
+	Message      string `json:"message,omitempty"`
+	ResponseText string `json:"response_text,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+	LatencyMs    int64  `json:"latency_ms,omitempty"`
+}
+
+type CreateAccountResponse struct {
+	AccountWithConcurrency
+	InitialTest *InitialAccountTestResult `json:"initial_test,omitempty"`
 }
 
 // UpdateAccountRequest represents update account request
@@ -210,6 +234,64 @@ func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, ac
 	}
 
 	return item
+}
+
+func (h *AccountHandler) runInitialTestIfRequested(ctx context.Context, accountID int64, req *InitialAccountTestRequest) *InitialAccountTestResult {
+	if req == nil || !req.Enabled {
+		return nil
+	}
+
+	result := &InitialAccountTestResult{
+		Success: false,
+		Status:  "failed",
+		ModelID: strings.TrimSpace(req.ModelID),
+	}
+
+	if h.accountTestService == nil {
+		result.Message = "account test service unavailable"
+		result.ErrorMessage = result.Message
+		return result
+	}
+
+	testResult, err := h.accountTestService.RunTestBackground(ctx, accountID, result.ModelID)
+	if err != nil {
+		result.Message = err.Error()
+		result.ErrorMessage = err.Error()
+		return result
+	}
+	if testResult == nil {
+		result.Message = "initial test produced no result"
+		result.ErrorMessage = result.Message
+		return result
+	}
+
+	result.Status = strings.TrimSpace(testResult.Status)
+	if result.Status == "" {
+		result.Status = "failed"
+	}
+	result.Success = strings.EqualFold(result.Status, "success")
+	result.ResponseText = strings.TrimSpace(testResult.ResponseText)
+	result.ErrorMessage = strings.TrimSpace(testResult.ErrorMessage)
+	result.LatencyMs = testResult.LatencyMs
+
+	switch {
+	case result.Success && result.ResponseText != "":
+		result.Message = result.ResponseText
+	case result.Success:
+		result.Message = "initial test passed"
+	case result.ErrorMessage != "":
+		result.Message = result.ErrorMessage
+	default:
+		result.Message = "initial test failed"
+	}
+
+	if result.Success && h.rateLimitService != nil {
+		if _, recoverErr := h.rateLimitService.RecoverAccountAfterSuccessfulTest(ctx, accountID); recoverErr != nil {
+			log.Printf("[AccountCreate] recover after initial test failed: account_id=%d err=%v", accountID, recoverErr)
+		}
+	}
+
+	return result
 }
 
 // List handles listing all accounts with pagination
@@ -541,7 +623,20 @@ func (h *AccountHandler) Create(c *gin.Context) {
 		h.adminService.ForceAntigravityPrivacy(ctx, account)
 		// OpenAI OAuth: 新账号直接设置隐私
 		h.adminService.ForceOpenAIPrivacy(ctx, account)
-		return h.buildAccountResponseWithRuntime(ctx, account), nil
+
+		initialTest := h.runInitialTestIfRequested(ctx, account.ID, req.InitialTest)
+		if initialTest != nil {
+			if latestAccount, getErr := h.adminService.GetAccount(ctx, account.ID); getErr == nil && latestAccount != nil {
+				account = latestAccount
+			} else if getErr != nil {
+				log.Printf("[AccountCreate] reload account after initial test failed: account_id=%d err=%v", account.ID, getErr)
+			}
+		}
+
+		return CreateAccountResponse{
+			AccountWithConcurrency: h.buildAccountResponseWithRuntime(ctx, account),
+			InitialTest:            initialTest,
+		}, nil
 	})
 	if err != nil {
 		// 检查是否为混合渠道错误

@@ -7,6 +7,7 @@ import { apiClient } from '../client'
 import type {
   Account,
   CreateAccountRequest,
+  CreatedAccountResponse,
   UpdateAccountRequest,
   PaginatedResponse,
   AccountUsageInfo,
@@ -124,8 +125,8 @@ export async function getById(id: number): Promise<Account> {
  * @param accountData - Account data
  * @returns Created account
  */
-export async function create(accountData: CreateAccountRequest): Promise<Account> {
-  const { data } = await apiClient.post<Account>('/admin/accounts', accountData)
+export async function create(accountData: CreateAccountRequest): Promise<CreatedAccountResponse> {
+  const { data } = await apiClient.post<CreatedAccountResponse>('/admin/accounts', accountData)
   return data
 }
 

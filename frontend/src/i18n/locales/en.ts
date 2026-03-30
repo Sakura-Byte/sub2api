@@ -2257,6 +2257,11 @@ export default {
         'When enabled, warmup requests like title generation will return mock responses without consuming upstream tokens',
       autoPauseOnExpired: 'Auto Pause On Expired',
       autoPauseOnExpiredDesc: 'When enabled, the account will auto pause scheduling after it expires',
+      initialTest: 'Run Initial Test After Create',
+      initialTestHint: 'Optional: probe once right after creation so issues like no org show up immediately.',
+      initialTestModel: 'Test Model',
+      initialTestModelPlaceholder: 'For example gpt-5.4; leave blank to use the platform default',
+      initialTestModelHint: 'Only used when the initial test toggle is enabled.',
       // Quota control (Anthropic OAuth/SetupToken only)
       quotaControl: {
         title: 'Quota Control',

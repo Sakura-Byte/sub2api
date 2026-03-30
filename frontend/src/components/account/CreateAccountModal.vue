@@ -2463,6 +2463,42 @@
       </div>
 
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="flex items-center justify-between">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.initialTest') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.initialTestHint') }}
+            </p>
+          </div>
+          <button
+            type="button"
+            @click="initialTestEnabled = !initialTestEnabled"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              initialTestEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                initialTestEnabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+        <div v-if="initialTestEnabled" class="mt-3">
+          <label class="input-label">{{ t('admin.accounts.initialTestModel') }}</label>
+          <input
+            v-model="initialTestModelID"
+            type="text"
+            class="input"
+            :placeholder="t('admin.accounts.initialTestModelPlaceholder')"
+          />
+          <p class="input-hint">{{ t('admin.accounts.initialTestModelHint') }}</p>
+        </div>
+      </div>
+
+      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <!-- Mixed Scheduling (only for antigravity accounts) -->
         <div v-if="form.platform === 'antigravity'" class="flex items-center gap-2">
           <label class="flex cursor-pointer items-center gap-2">
@@ -3057,6 +3093,8 @@ const selectedErrorCodes = ref<number[]>([])
 const customErrorCodeInput = ref<number | null>(null)
 const interceptWarmupRequests = ref(false)
 const autoPauseOnExpired = ref(true)
+const initialTestEnabled = ref(false)
+const initialTestModelID = ref('')
 const openaiPassthroughEnabled = ref(false)
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
@@ -3682,6 +3720,36 @@ const withAntigravityConfirmFlag = (payload: CreateAccountRequest): CreateAccoun
   return cloned
 }
 
+const buildInitialTestConfig = (): CreateAccountRequest['initial_test'] | undefined => {
+  if (!initialTestEnabled.value) {
+    return undefined
+  }
+  const modelID = initialTestModelID.value.trim()
+  if (!modelID) {
+    return { enabled: true }
+  }
+  return {
+    enabled: true,
+    model_id: modelID
+  }
+}
+
+const withCreateOptions = (payload: CreateAccountRequest): CreateAccountRequest => {
+  const nextPayload = withAntigravityConfirmFlag(payload)
+  const initialTest = buildInitialTestConfig()
+  if (!initialTest) {
+    return nextPayload
+  }
+  return {
+    ...nextPayload,
+    initial_test: initialTest
+  }
+}
+
+const createAccountRequest = (payload: CreateAccountRequest) => {
+  return adminAPI.accounts.create(withCreateOptions(payload))
+}
+
 const ensureAntigravityMixedChannelConfirmed = async (onConfirm: () => Promise<void>): Promise<boolean> => {
   if (!needsMixedChannelCheck(form.platform)) {
     return true
@@ -3715,7 +3783,7 @@ const ensureAntigravityMixedChannelConfirmed = async (onConfirm: () => Promise<v
 const submitCreateAccount = async (payload: CreateAccountRequest) => {
   submitting.value = true
   try {
-    await adminAPI.accounts.create(withAntigravityConfirmFlag(payload))
+    await createAccountRequest(payload)
     appStore.showSuccess(t('admin.accounts.accountCreated'))
     emit('created')
     handleClose()
@@ -3780,6 +3848,8 @@ const resetForm = () => {
   customErrorCodeInput.value = null
   interceptWarmupRequests.value = false
   autoPauseOnExpired.value = true
+  initialTestEnabled.value = false
+  initialTestModelID.value = ''
   openaiPassthroughEnabled.value = false
   openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
@@ -4202,7 +4272,7 @@ const handleImportAccessToken = async (accessTokenInput: string) => {
         const soraExtra = buildSoraExtra()
 
         const accountName = accessTokens.length > 1 ? `${form.name} #${i + 1}` : form.name
-        await adminAPI.accounts.create({
+        await createAccountRequest({
           name: accountName,
           notes: form.notes,
           platform: 'sora',
@@ -4356,7 +4426,7 @@ const handleOpenAIExchange = async (authCode: string) => {
     let openaiAccountId: string | number | undefined
 
     if (shouldCreateOpenAI) {
-      const openaiAccount = await adminAPI.accounts.create({
+      const openaiAccount = await createAccountRequest({
         name: form.name,
         notes: form.notes,
         platform: 'openai',
@@ -4386,7 +4456,7 @@ const handleOpenAIExchange = async (authCode: string) => {
 
       const soraName = shouldCreateOpenAI ? `${form.name} (Sora)` : form.name
       const soraExtra = buildSoraExtra(shouldCreateOpenAI ? extra : oauthExtra, openaiAccountId)
-      await adminAPI.accounts.create({
+      await createAccountRequest({
         name: soraName,
         notes: form.notes,
         platform: 'sora',
@@ -4480,7 +4550,7 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
         let openaiAccountId: string | number | undefined
 
         if (shouldCreateOpenAI) {
-          const openaiAccount = await adminAPI.accounts.create({
+          const openaiAccount = await createAccountRequest({
             name: accountName,
             notes: form.notes,
             platform: 'openai',
@@ -4508,7 +4578,7 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
           }
           const soraName = shouldCreateOpenAI ? `${accountName} (Sora)` : accountName
           const soraExtra = buildSoraExtra(shouldCreateOpenAI ? extra : oauthExtra, openaiAccountId)
-          await adminAPI.accounts.create({
+          await createAccountRequest({
             name: soraName,
             notes: form.notes,
             platform: 'sora',
@@ -4609,7 +4679,7 @@ const handleOpenAIBatchST = async (sessionTokenInput: string) => {
         const defaultName = targetPlatform === 'sora' ? 'Sora OAuth Account' : 'OpenAI OAuth Account'
         const baseName = form.name || tokenInfo.email || defaultName
         const accountName = sessionTokens.length > 1 ? `${baseName} #${i + 1}` : baseName
-        await adminAPI.accounts.create({
+        await createAccountRequest({
           name: accountName,
           notes: form.notes,
           platform: targetPlatform,
@@ -4714,7 +4784,7 @@ const handleAntigravityValidateRT = async (refreshTokenInput: string) => {
           expires_at: form.expires_at,
           auto_pause_on_expired: autoPauseOnExpired.value
         })
-        await adminAPI.accounts.create(createPayload)
+        await createAccountRequest(createPayload)
         successCount++
       } catch (error: any) {
         failedCount++
@@ -5040,7 +5110,7 @@ const handleCookieAuth = async (sessionKey: string) => {
           credentials.temp_unschedulable_rules = tempUnschedPayload
         }
 
-        await adminAPI.accounts.create({
+        await createAccountRequest({
           name: accountName,
           notes: form.notes,
           platform: form.platform,

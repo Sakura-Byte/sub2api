@@ -2401,6 +2401,11 @@ export default {
       interceptWarmupRequestsDesc: '启用后，标题生成等预热请求将返回 mock 响应，不消耗上游 token',
       autoPauseOnExpired: '过期自动暂停调度',
       autoPauseOnExpiredDesc: '启用后，账号过期将自动暂停调度',
+      initialTest: '创建后立即测试',
+      initialTestHint: '可选：创建成功后立即 probe 一次，便于提前发现 no org 等问题。',
+      initialTestModel: '测试模型',
+      initialTestModelPlaceholder: '例如 gpt-5.4；留空则使用平台默认模型',
+      initialTestModelHint: '仅在开启“创建后立即测试”时生效。',
       // Quota control (Anthropic OAuth/SetupToken only)
       quotaControl: {
         title: '配额控制',
