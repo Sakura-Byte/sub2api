@@ -83,7 +83,7 @@ func TestOpenAIOAuthService_RefreshAccountToken_PrefersSessionTokenForOpenAI(t *
 }
 
 func TestOpenAIOAuthService_RefreshAccountToken_UsesRefreshTokenWhenSessionTokenMissing(t *testing.T) {
-	oauthClient := &openaiOAuthClientRefreshStub{
+	oauthClient := &openaiOAuthClientTrackingStub{
 		tokenResponse: &openai.TokenResponse{
 			AccessToken:  "rt-access-token",
 			RefreshToken: "rt-new-token",
@@ -121,7 +121,7 @@ func TestOpenAIOAuthService_RefreshAccountToken_NoRecoveryCredential(t *testing.
 
 	_, err := svc.RefreshAccountToken(context.Background(), account)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "no session_token or refresh_token available")
+	require.Contains(t, err.Error(), "no session_token, refresh_token, or access_token available")
 }
 
 type openaiOAuthClientNoopStub struct{}
@@ -138,22 +138,22 @@ func (s *openaiOAuthClientNoopStub) RefreshTokenWithClientID(ctx context.Context
 	return nil, errors.New("not implemented")
 }
 
-type openaiOAuthClientRefreshStub struct {
+type openaiOAuthClientTrackingStub struct {
 	tokenResponse    *openai.TokenResponse
 	lastRefreshToken string
 	lastProxyURL     string
 	lastClientID     string
 }
 
-func (s *openaiOAuthClientRefreshStub) ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL, clientID string) (*openai.TokenResponse, error) {
+func (s *openaiOAuthClientTrackingStub) ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL, clientID string) (*openai.TokenResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (s *openaiOAuthClientRefreshStub) RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*openai.TokenResponse, error) {
+func (s *openaiOAuthClientTrackingStub) RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*openai.TokenResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (s *openaiOAuthClientRefreshStub) RefreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL string, clientID string) (*openai.TokenResponse, error) {
+func (s *openaiOAuthClientTrackingStub) RefreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL string, clientID string) (*openai.TokenResponse, error) {
 	s.lastRefreshToken = refreshToken
 	s.lastProxyURL = proxyURL
 	s.lastClientID = clientID

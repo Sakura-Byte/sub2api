@@ -609,11 +609,33 @@ func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *A
 	}
 
 	refreshToken := strings.TrimSpace(account.GetCredential("refresh_token"))
-	if refreshToken == "" {
-		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_NO_RECOVERY_TOKEN", "no session_token or refresh_token available")
+	if refreshToken != "" {
+		return s.refreshAccountTokenWithRefreshToken(ctx, account, refreshToken)
 	}
 
-	return s.refreshAccountTokenWithRefreshToken(ctx, account, refreshToken)
+	accessToken := strings.TrimSpace(account.GetCredential("access_token"))
+	if accessToken != "" {
+		tokenInfo := &OpenAITokenInfo{
+			AccessToken:      accessToken,
+			IDToken:          account.GetCredential("id_token"),
+			ClientID:         account.GetCredential("client_id"),
+			Email:            account.GetCredential("email"),
+			ChatGPTAccountID: account.GetCredential("chatgpt_account_id"),
+			ChatGPTUserID:    account.GetCredential("chatgpt_user_id"),
+			OrganizationID:   account.GetCredential("organization_id"),
+			PlanType:         account.GetCredential("plan_type"),
+		}
+		if expiresAt := account.GetCredentialAsTime("expires_at"); expiresAt != nil {
+			tokenInfo.ExpiresAt = expiresAt.Unix()
+			tokenInfo.ExpiresIn = int64(time.Until(*expiresAt).Seconds())
+			if tokenInfo.ExpiresIn < 0 {
+				tokenInfo.ExpiresIn = 0
+			}
+		}
+		return tokenInfo, nil
+	}
+
+	return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_NO_RECOVERY_TOKEN", "no session_token, refresh_token, or access_token available")
 }
 
 func (s *OpenAIOAuthService) refreshAccountTokenWithRefreshToken(ctx context.Context, account *Account, refreshToken string) (*OpenAITokenInfo, error) {
