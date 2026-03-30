@@ -19,6 +19,9 @@ type openAIAccountTestRepo struct {
 	updatedExtra  map[string]any
 	rateLimitedID int64
 	rateLimitedAt *time.Time
+	tempCalls     int
+	tempUntil     *time.Time
+	tempReason    string
 }
 
 func (r *openAIAccountTestRepo) UpdateExtra(_ context.Context, _ int64, updates map[string]any) error {
@@ -29,6 +32,13 @@ func (r *openAIAccountTestRepo) UpdateExtra(_ context.Context, _ int64, updates 
 func (r *openAIAccountTestRepo) SetRateLimited(_ context.Context, id int64, resetAt time.Time) error {
 	r.rateLimitedID = id
 	r.rateLimitedAt = &resetAt
+	return nil
+}
+
+func (r *openAIAccountTestRepo) SetTempUnschedulable(_ context.Context, _ int64, until time.Time, reason string) error {
+	r.tempCalls++
+	r.tempUntil = &until
+	r.tempReason = reason
 	return nil
 }
 
@@ -98,5 +108,36 @@ func TestAccountTestService_OpenAI429PersistsSnapshotAndRateLimit(t *testing.T) 
 	require.NotNil(t, account.RateLimitResetAt)
 	if account.RateLimitResetAt != nil && repo.rateLimitedAt != nil {
 		require.WithinDuration(t, *repo.rateLimitedAt, *account.RateLimitResetAt, time.Second)
+	}
+}
+
+func TestAccountTestService_OpenAI401NoOrganizationSetsTempUnschedulable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := newSoraTestContext()
+
+	resp := newJSONResponse(http.StatusUnauthorized, `{"error":{"message":"You must be a member of an organization to use the API. Please contact us through our help center at help.openai.com.","type":"invalid_request_error","code":"no_organization","param":null},"status":401}`)
+
+	repo := &openAIAccountTestRepo{}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{resp}}
+	svc := &AccountTestService{
+		accountRepo:  repo,
+		httpUpstream: upstream,
+		cfg:          &config.Config{},
+	}
+	account := &Account{
+		ID:          90,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "test-token"},
+	}
+
+	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4")
+	require.Error(t, err)
+	require.Equal(t, 1, repo.tempCalls)
+	require.NotNil(t, repo.tempUntil)
+	require.Contains(t, repo.tempReason, "OpenAI organization membership pending")
+	if repo.tempUntil != nil {
+		require.WithinDuration(t, time.Now().Add(10*time.Minute), *repo.tempUntil, 3*time.Second)
 	}
 }

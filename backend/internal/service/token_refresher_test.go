@@ -3,6 +3,9 @@
 package service
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"testing"
 	"time"
@@ -265,4 +268,37 @@ func TestOpenAITokenRefresher_CanRefresh(t *testing.T) {
 			require.Equal(t, tt.want, refresher.CanRefresh(account))
 		})
 	}
+}
+
+func TestOpenAITokenRefresher_Refresh_UsesSessionToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Contains(t, r.Header.Get("Cookie"), "__Secure-next-auth.session-token=st-token")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"accessToken":"session-at","sessionToken":"server-st","expires":"2099-01-01T00:00:00Z","user":{"email":"demo@example.com"},"account":{"id":"acc-1","planType":"plus"}}`))
+	}))
+	defer server.Close()
+
+	origin := openAIChatGPTSessionAuthURL
+	openAIChatGPTSessionAuthURL = server.URL
+	defer func() { openAIChatGPTSessionAuthURL = origin }()
+
+	oauthService := NewOpenAIOAuthService(nil, &openaiOAuthClientNoopStub{})
+	defer oauthService.Stop()
+
+	refresher := NewOpenAITokenRefresher(oauthService, nil)
+	account := &Account{
+		ID:       1,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"session_token": "st-token",
+			"expires_at":    time.Now().Add(-time.Minute).Format(time.RFC3339),
+		},
+	}
+
+	newCredentials, err := refresher.Refresh(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, "session-at", newCredentials["access_token"])
+	require.Equal(t, "server-st", newCredentials["session_token"])
 }

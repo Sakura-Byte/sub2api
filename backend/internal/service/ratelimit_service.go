@@ -152,6 +152,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	case 401:
 		// OpenAI: token_revoked 直接删除本地账号；token_invalidated 保持现有失效/刷新逻辑。
 		openai401Code := extractUpstreamErrorCode(responseBody)
+		openaiNoOrganization := account.Platform == PlatformOpenAI && isOpenAINoOrganizationError(statusCode, responseBody)
 		if account.Platform == PlatformOpenAI && openai401Code == "token_revoked" {
 			if s.tokenCacheInvalidator != nil {
 				if err := s.tokenCacheInvalidator.InvalidateToken(ctx, account); err != nil {
@@ -206,7 +207,9 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			}
 			// 3. 临时不可调度，替代 SetError（保持 status=active 让刷新服务能拾取）
 			msg := "Authentication failed (401): invalid or expired credentials"
-			if upstreamMsg != "" {
+			if openaiNoOrganization {
+				msg = buildOpenAINoOrganizationTempUnschedReason(responseBody)
+			} else if upstreamMsg != "" {
 				msg = "OAuth 401: " + upstreamMsg
 			}
 			cooldownMinutes := s.cfg.RateLimit.OAuth401CooldownMinutes
@@ -216,6 +219,8 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			until := time.Now().Add(time.Duration(cooldownMinutes) * time.Minute)
 			if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, msg); err != nil {
 				slog.Warn("oauth_401_set_temp_unschedulable_failed", "account_id", account.ID, "error", err)
+			} else if openaiNoOrganization {
+				slog.Info("openai_no_organization_temp_unschedulable", "account_id", account.ID, "until", until.Format(time.RFC3339))
 			}
 			shouldDisable = true
 		} else {

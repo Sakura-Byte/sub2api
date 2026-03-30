@@ -550,12 +550,32 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 				_ = s.accountRepo.SetRateLimited(ctx, account.ID, *resetAt)
 				account.RateLimitResetAt = resetAt
 			}
+			if resp.StatusCode == http.StatusUnauthorized && isOpenAINoOrganizationError(resp.StatusCode, body) {
+				s.tempUnschedOpenAINoOrganization(ctx, account, body)
+			}
 		}
 		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body)))
 	}
 
 	// Process SSE stream
 	return s.processOpenAIStream(c, resp.Body)
+}
+
+func (s *AccountTestService) tempUnschedOpenAINoOrganization(ctx context.Context, account *Account, responseBody []byte) {
+	if s == nil || s.accountRepo == nil || account == nil || !account.IsOpenAIOAuth() {
+		return
+	}
+
+	cooldownMinutes := 10
+	if s.cfg != nil && s.cfg.RateLimit.OAuth401CooldownMinutes > 0 {
+		cooldownMinutes = s.cfg.RateLimit.OAuth401CooldownMinutes
+	}
+
+	until := time.Now().Add(time.Duration(cooldownMinutes) * time.Minute)
+	reason := buildOpenAINoOrganizationTempUnschedReason(responseBody)
+	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
+		log.Printf("[AccountTest] 设置 OpenAI no_organization 临时不可调度失败: account_id=%d err=%v", account.ID, err)
+	}
 }
 
 // testGeminiAccountConnection tests a Gemini account's connection

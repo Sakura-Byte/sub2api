@@ -51,6 +51,79 @@ func TestOpenAIOAuthService_ExchangeOpenAISessionToken_UsesAccessTokenExp(t *tes
 	require.Equal(t, "acc-1", info.ChatGPTAccountID)
 }
 
+func TestOpenAIOAuthService_RefreshAccountToken_PrefersSessionTokenForOpenAI(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Contains(t, r.Header.Get("Cookie"), "__Secure-next-auth.session-token=st-token")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"accessToken":"session-at","sessionToken":"server-st","expires":"2099-01-01T00:00:00Z","user":{"email":"demo@example.com"},"account":{"id":"acc-1","planType":"plus"}}`))
+	}))
+	defer server.Close()
+
+	origin := openAIChatGPTSessionAuthURL
+	openAIChatGPTSessionAuthURL = server.URL
+	defer func() { openAIChatGPTSessionAuthURL = origin }()
+
+	svc := NewOpenAIOAuthService(nil, &openaiOAuthClientNoopStub{})
+	defer svc.Stop()
+
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"session_token": "st-token",
+			"refresh_token": "rt-should-not-be-used",
+		},
+	}
+
+	info, err := svc.RefreshAccountToken(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, "session-at", info.AccessToken)
+	require.Equal(t, "server-st", info.SessionToken)
+}
+
+func TestOpenAIOAuthService_RefreshAccountToken_UsesRefreshTokenWhenSessionTokenMissing(t *testing.T) {
+	oauthClient := &openaiOAuthClientRefreshStub{
+		tokenResponse: &openai.TokenResponse{
+			AccessToken:  "rt-access-token",
+			RefreshToken: "rt-new-token",
+			ExpiresIn:    3600,
+		},
+	}
+	svc := NewOpenAIOAuthService(nil, oauthClient)
+	defer svc.Stop()
+
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"refresh_token": "rt-token",
+			"client_id":     "client-id-1",
+		},
+	}
+
+	info, err := svc.RefreshAccountToken(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, "rt-access-token", info.AccessToken)
+	require.Equal(t, "rt-token", oauthClient.lastRefreshToken)
+	require.Equal(t, "client-id-1", oauthClient.lastClientID)
+}
+
+func TestOpenAIOAuthService_RefreshAccountToken_NoRecoveryCredential(t *testing.T) {
+	svc := NewOpenAIOAuthService(nil, &openaiOAuthClientNoopStub{})
+	defer svc.Stop()
+
+	account := &Account{
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Credentials: map[string]any{},
+	}
+
+	_, err := svc.RefreshAccountToken(context.Background(), account)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no session_token or refresh_token available")
+}
+
 type openaiOAuthClientNoopStub struct{}
 
 func (s *openaiOAuthClientNoopStub) ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL, clientID string) (*openai.TokenResponse, error) {
@@ -63,6 +136,28 @@ func (s *openaiOAuthClientNoopStub) RefreshToken(ctx context.Context, refreshTok
 
 func (s *openaiOAuthClientNoopStub) RefreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL string, clientID string) (*openai.TokenResponse, error) {
 	return nil, errors.New("not implemented")
+}
+
+type openaiOAuthClientRefreshStub struct {
+	tokenResponse    *openai.TokenResponse
+	lastRefreshToken string
+	lastProxyURL     string
+	lastClientID     string
+}
+
+func (s *openaiOAuthClientRefreshStub) ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL, clientID string) (*openai.TokenResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s *openaiOAuthClientRefreshStub) RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*openai.TokenResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s *openaiOAuthClientRefreshStub) RefreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL string, clientID string) (*openai.TokenResponse, error) {
+	s.lastRefreshToken = refreshToken
+	s.lastProxyURL = proxyURL
+	s.lastClientID = clientID
+	return s.tokenResponse, nil
 }
 
 func TestOpenAIOAuthService_ExchangeSoraSessionToken_Success(t *testing.T) {

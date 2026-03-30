@@ -590,7 +590,8 @@ func sanitizeSessionToken(raw string) string {
 	return strings.TrimSpace(token)
 }
 
-// RefreshAccountToken refreshes token for an OpenAI/Sora OAuth account
+// RefreshAccountToken recovers a fresh access_token for an OpenAI/Sora OAuth account.
+// session_token 模式优先且独占使用 session_token 恢复，不回退到 refresh_token。
 func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *Account) (*OpenAITokenInfo, error) {
 	if account.Platform != PlatformOpenAI && account.Platform != PlatformSora {
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_INVALID_ACCOUNT", "account is not an OpenAI/Sora account")
@@ -599,11 +600,23 @@ func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *A
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_INVALID_ACCOUNT_TYPE", "account is not an OAuth account")
 	}
 
-	refreshToken := account.GetCredential("refresh_token")
-	if refreshToken == "" {
-		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_NO_REFRESH_TOKEN", "no refresh token available")
+	sessionToken := strings.TrimSpace(account.GetCredential("session_token"))
+	if sessionToken != "" {
+		if account.Platform == PlatformSora {
+			return s.ExchangeSoraSessionToken(ctx, sessionToken, account.ProxyID)
+		}
+		return s.ExchangeOpenAISessionToken(ctx, sessionToken, account.ProxyID)
 	}
 
+	refreshToken := strings.TrimSpace(account.GetCredential("refresh_token"))
+	if refreshToken == "" {
+		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_NO_RECOVERY_TOKEN", "no session_token or refresh_token available")
+	}
+
+	return s.refreshAccountTokenWithRefreshToken(ctx, account, refreshToken)
+}
+
+func (s *OpenAIOAuthService) refreshAccountTokenWithRefreshToken(ctx context.Context, account *Account, refreshToken string) (*OpenAITokenInfo, error) {
 	var proxyURL string
 	if account.ProxyID != nil {
 		proxy, err := s.proxyRepo.GetByID(ctx, *account.ProxyID)

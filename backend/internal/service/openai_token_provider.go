@@ -292,7 +292,6 @@ func (p *OpenAITokenProvider) tryRecoverFromSessionToken(ctx context.Context, ac
 	for k, v := range p.openAIOAuthService.BuildAccountCredentials(tokenInfo) {
 		newCredentials[k] = v
 	}
-	newCredentials["session_token"] = sessionToken
 	account.Credentials = cloneCredentials(newCredentials)
 
 	if err := persistAccountCredentials(ctx, p.accountRepo, account, newCredentials); err != nil {
