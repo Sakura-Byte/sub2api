@@ -150,39 +150,26 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		}
 		// 其他 400 错误（如参数问题）不处理，不禁用账号
 	case 401:
-		// OpenAI: token_revoked 直接删除本地账号；token_invalidated 保持现有失效/刷新逻辑。
+		// OpenAI: token_invalidated / token_revoked 直接删除本地账号，不再走本地刷新恢复。
 		openai401Code := extractUpstreamErrorCode(responseBody)
 		openaiNoOrganization := account.Platform == PlatformOpenAI && isOpenAINoOrganizationError(statusCode, responseBody)
-		if account.Platform == PlatformOpenAI && openai401Code == "token_revoked" {
+		if account.Platform == PlatformOpenAI &&
+			(openai401Code == "token_invalidated" || openai401Code == "token_revoked") {
 			if s.tokenCacheInvalidator != nil {
 				if err := s.tokenCacheInvalidator.InvalidateToken(ctx, account); err != nil {
-					slog.Warn("openai_token_revoked_invalidate_cache_failed", "account_id", account.ID, "error", err)
+					slog.Warn("openai_auth_invalidated_invalidate_cache_failed", "account_id", account.ID, "error", err)
 				}
 			}
 			if err := s.accountRepo.Delete(ctx, account.ID); err != nil {
-				slog.Warn("openai_token_revoked_delete_failed", "account_id", account.ID, "error", err)
-				msg := "Token revoked (401): account authentication permanently revoked"
+				slog.Warn("openai_auth_invalidated_delete_failed", "account_id", account.ID, "error", err)
+				msg := "OpenAI authentication invalidated (401): account authentication permanently revoked"
 				if upstreamMsg != "" {
-					msg = "Token revoked (401): " + upstreamMsg
+					msg = "OpenAI authentication invalidated (401): " + upstreamMsg
 				}
 				s.handleAuthError(ctx, account, msg)
 			} else {
-				slog.Info("openai_token_revoked_account_deleted", "account_id", account.ID)
+				slog.Info("openai_auth_invalidated_account_deleted", "account_id", account.ID, "error_code", openai401Code)
 			}
-			shouldDisable = true
-			break
-		}
-		hasRecoverableOpenAISessionToken := account.Platform == PlatformOpenAI &&
-			account.Type == AccountTypeOAuth &&
-			strings.TrimSpace(account.GetOpenAISessionToken()) != ""
-		if account.Platform == PlatformOpenAI &&
-			(openai401Code == "token_invalidated" || openai401Code == "token_revoked") &&
-			!hasRecoverableOpenAISessionToken {
-			msg := "Token revoked (401): account authentication permanently revoked"
-			if upstreamMsg != "" {
-				msg = "Token revoked (401): " + upstreamMsg
-			}
-			s.handleAuthError(ctx, account, msg)
 			shouldDisable = true
 			break
 		}

@@ -229,6 +229,38 @@ func TestRateLimitService_HandleUpstreamError_OpenAITokenRevokedDeletesAccount(t
 	require.Len(t, invalidator.accounts, 1)
 }
 
+func TestRateLimitService_HandleUpstreamError_OpenAITokenInvalidatedDeletesAccount(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	invalidator := &tokenCacheInvalidatorRecorder{}
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service.SetTokenCacheInvalidator(invalidator)
+	account := &Account{
+		ID:       1041,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":  "token",
+			"session_token": "st-token",
+		},
+	}
+
+	shouldDisable := service.HandleUpstreamError(
+		context.Background(),
+		account,
+		401,
+		http.Header{},
+		[]byte(`{"error":{"message":"Your authentication token has been invalidated. Please try signing in again.","type":"invalid_request_error","code":"token_invalidated","param":null},"status":401}`),
+	)
+
+	require.True(t, shouldDisable)
+	require.Equal(t, 0, repo.setErrorCalls)
+	require.Equal(t, 0, repo.tempCalls)
+	require.Equal(t, 0, repo.updateCredentialsCalls)
+	require.Equal(t, 1, repo.deleteCalls)
+	require.Equal(t, []int64{1041}, repo.deletedIDs)
+	require.Len(t, invalidator.accounts, 1)
+}
+
 func TestRateLimitService_HandleUpstreamError_OpenAITokenRevokedDeleteFallbackSetsError(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{deleteErr: errors.New("delete failed")}
 	invalidator := &tokenCacheInvalidatorRecorder{}
@@ -256,6 +288,6 @@ func TestRateLimitService_HandleUpstreamError_OpenAITokenRevokedDeleteFallbackSe
 	require.Equal(t, 1, repo.setErrorCalls)
 	require.Equal(t, 0, repo.tempCalls)
 	require.Equal(t, 0, repo.updateCredentialsCalls)
-	require.Contains(t, repo.lastErrorMsg, "Token revoked")
+	require.Contains(t, repo.lastErrorMsg, "OpenAI authentication invalidated")
 	require.Len(t, invalidator.accounts, 1)
 }

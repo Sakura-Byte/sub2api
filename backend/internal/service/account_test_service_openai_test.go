@@ -189,3 +189,34 @@ func TestAccountTestService_OpenAI401TokenRevokedDeletesAccount(t *testing.T) {
 	require.Equal(t, 0, repo.tempCalls)
 	require.Equal(t, 0, repo.setErrorCalls)
 }
+
+func TestAccountTestService_OpenAI401TokenInvalidatedDeletesAccount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := newSoraTestContext()
+
+	resp := newJSONResponse(http.StatusUnauthorized, `{"error":{"message":"Your authentication token has been invalidated. Please try signing in again.","type":"invalid_request_error","code":"token_invalidated","param":null},"status":401}`)
+
+	repo := &openAIAccountTestRepo{}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{resp}}
+	rateLimitSvc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := &AccountTestService{
+		accountRepo:      repo,
+		httpUpstream:     upstream,
+		cfg:              &config.Config{},
+		rateLimitService: rateLimitSvc,
+	}
+	account := &Account{
+		ID:          92,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "test-token", "session_token": "st-token"},
+	}
+
+	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4")
+	require.Error(t, err)
+	require.Equal(t, 1, repo.deleteCalls)
+	require.Equal(t, []int64{92}, repo.deletedIDs)
+	require.Equal(t, 0, repo.tempCalls)
+	require.Equal(t, 0, repo.setErrorCalls)
+}
